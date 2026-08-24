@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<title>Mooz · Cliente no atendimento</title>
+<script src="https://appssdk.zoom.us/sdk.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    padding: 16px;
+    background: #f7f7f8;
+    color: #1a1a1a;
+    font-size: 14px;
+  }
+  h1 {
+    font-size: 15px;
+    margin: 0 0 12px;
+  }
+  .card {
+    background: #fff;
+    border: 1px solid #e2e2e2;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+  }
+  .card h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    color: #666;
+    margin: 0 0 8px;
+  }
+  .row { display: flex; justify-content: space-between; padding: 3px 0; }
+  .row span:first-child { color: #666; }
+  .empty { color: #999; font-style: italic; padding: 4px 0; }
+  .item {
+    border-top: 1px solid #eee;
+    padding: 6px 0;
+  }
+  .item:first-child { border-top: none; }
+  .item .title { font-weight: 600; }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    background: #eef2ff;
+    color: #3348c9;
+    margin-left: 6px;
+  }
+  #status { color: #999; font-size: 12px; margin-bottom: 8px; }
+  #hs-link { display: inline-block; margin-top: 4px; font-size: 12px; }
+  input[type=text], textarea {
+    width: 100%;
+    font: inherit;
+    padding: 6px 8px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    margin-top: 2px;
+  }
+  textarea { resize: vertical; min-height: 56px; }
+  button {
+    font: inherit;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    background: #3348c9;
+    color: #fff;
+  }
+  button.secondary { background: #eee; color: #333; }
+  button.link {
+    background: none;
+    color: #3348c9;
+    padding: 0;
+    font-size: 12px;
+  }
+  .field-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; gap: 8px; }
+  .field-row span:first-child { color: #666; flex-shrink: 0; }
+  .field-actions { display: flex; gap: 6px; margin-top: 8px; }
+  .save-msg { font-size: 12px; margin-top: 6px; }
+  .save-msg.ok { color: #1a7f37; }
+  .save-msg.err { color: #c0392b; }
+</style>
+</head>
+<body>
+  <h1>Contexto do cliente (HubSpot)</h1>
+  <div id="status">Aguardando atendimento...</div>
+  <div id="content"></div>
+
+<script>
+  // NOTE: CDN version — window.zoomSdk é global, por isso usamos "sdk" e não "zoomSdk".
+  let sdk = window.zoomSdk;
+  let currentEngagementId = null;
+
+  const statusEl = document.getElementById('status');
+  const contentEl = document.getElementById('content');
+
+  async function init() {
+    try {
+      // Lista de capabilities recomendada pelo próprio material de referência
+      // do Zoom ("Zoom Apps for ZCC Developer Overview" — slide 17): o bloco
+      // "Core" é necessário para o app funcionar dentro do client em geral, o
+      // bloco "Zoom Contact Center" é o que dá acesso ao engagement.
+      const config = await sdk.config({
+        version: '0.16',
+        capabilities: [
+          // Core
+          'getSupportedJsApis',
+          'getRunningContext',
+          'expandApp',
+          'authorize',
+          'promptAuthorize',
+          'getAppContext',
+          'appPopout',
+          'onAppPopout',
+          'onExpandApp',
+          'onAuthorized',
+          'onRunningContextChange',
+          // Zoom Contact Center
+          'getEngagementContext',
+          'getEngagementStatus',
+          'getAppVariableList',
+          'getEngagementVariableValue',
+          'onEngagementContextChange',
+          'onEngagementStatusChange',
+          'onEngagementVariableValueChange',
+        ],
+      });
+
+      if (config.runningContext !== 'inContactCenter') {
+        // O app também pode ser aberto fora de um engagement (ex.: preview).
+        // As APIs de engagement só respondem com dados quando
+        // runningContext === 'inContactCenter'.
+        statusEl.textContent = 'Contexto atual: ' + config.runningContext + ' (fora de um engagement do ZCC)';
+      } else {
+        statusEl.textContent = 'Conectado ao Zoom Contact Center';
+      }
+
+      sdk.addEventListener('onEngagementContextChange', (evt) => {
+        handleEngagement(evt && evt.engagementContext);
+      });
+      sdk.addEventListener('onEngagementStatusChange', (evt) => {
+        const state = evt && evt.engagementStatus && evt.engagementStatus.state;
+        if (state === 'end') {
+          currentEngagementId = null;
+          renderEmpty('Atendimento encerrado.');
+        }
+      });
+
+      // Carrega o contexto atual, se já existir um atendimento em andamento
+      const [ctxResp, statusResp] = await Promise.all([
+        sdk.callZoomApi('getEngagementContext').catch(() => null),
+        sdk.callZoomApi('getEngagementStatus').catch(() => null),
+      ]);
+      handleEngagement(ctxResp && ctxResp.engagementContext, statusResp && statusResp.engagementStatus);
+    } catch (err) {
+      console.error('Fora do cliente Zoom ou falha no config():', err);
+      showDemoMode();
+    }
+  }
+
+  function showDemoMode() {
+    statusEl.textContent = 'Modo de pré-visualização (fora do Zoom) — usando dados de exemplo';
+    renderCustomer({
+      contact: { id: null, firstname: 'Ana', lastname: 'Silva', email: 'ana.silva@example.com', phone: '+55 11 90000-0000', city: 'São Paulo' },
+      deals: [{ dealname: 'MZ-10234', dealstage: 'Em separação', amount: '349.90' }],
+      tickets: [{ subject: 'Dúvida sobre troca', hs_pipeline_stage: 'Aberto', hs_ticket_priority: 'MEDIUM' }],
+    });
+  }
+
+  // Nome da(s) variável(is) de Flow do ZCC que guardam e-mail/telefone do
+  // consumidor, se você optar por capturá-los explicitamente no Flow (IVR /
+  // formulário) em vez de depender do formato de EngagementContext/Status.
+  // Ajuste para os nomes reais configurados no seu Flow, se aplicável.
+  const FLOW_VARIABLES = { email: 'customer_email', phone: 'customer_phone' };
+
+  async function handleEngagement(engagementContext, engagementStatus) {
+    if (!engagementContext || !engagementContext.engagementId) {
+      renderEmpty('Nenhum atendimento ativo no momento.');
+      return;
+    }
+    currentEngagementId = engagementContext.engagementId;
+    renderEmpty('Buscando dados do cliente...');
+
+    let identifier = extractIdentifier(engagementContext, engagementStatus);
+
+    // Fallback: se o payload de engagement não trouxer e-mail/telefone
+    // diretamente (comum em voz, onde só vem o número que discou), tenta ler
+    // como variável de Flow — depende de o Flow do ZCC ter sido configurado
+    // para capturar/repassar esse dado.
+    if (!identifier.email && !identifier.phone) {
+      identifier = await tryFlowVariables();
+    }
+
+    if (!identifier.email && !identifier.phone) {
+      renderEmpty('Não foi possível identificar o cliente deste atendimento.');
+      return;
+    }
+
+    try {
+      const params = new URLSearchParams();
+      if (identifier.email) params.set('email', identifier.email);
+      if (identifier.phone) params.set('phone', identifier.phone);
+      const res = await fetch('/api/customer?' + params.toString());
+      if (!res.ok) throw new Error('Backend respondeu ' + res.status);
+      const data = await res.json();
+      if (engagementContext.engagementId === currentEngagementId) {
+        renderCustomer(data);
+      }
+    } catch (err) {
+      console.error(err);
+      renderEmpty('Erro ao buscar dados no HubSpot.');
+    }
+  }
+
+  // Extrai e-mail/telefone do payload de engagement/status. O formato exato
+  // pode variar por canal (chat/voz/vídeo); ajuste estes caminhos após
+  // inspecionar o payload real em produção — deixe um
+  // console.log(engagementContext, engagementStatus) temporário na primeira
+  // sessão de teste real no ZCC.
+  function extractIdentifier(ctx, status) {
+    const ctxConsumer = ctx.consumer || ctx.customer || {};
+    const statusConsumer = (status && (status.consumer || status.customer)) || {};
+    return {
+      email: ctxConsumer.email || statusConsumer.email || ctx.email || null,
+      phone: ctxConsumer.phoneNumber || ctxConsumer.phone
+        || statusConsumer.phoneNumber || statusConsumer.phone
+        || ctx.phoneNumber || null,
+    };
+  }
+
+  // Fallback: lê variáveis do Flow do ZCC (getEngagementVariableValue), caso
+  // o Flow tenha sido configurado para capturar e repassar e-mail/telefone
+  // do consumidor explicitamente. Ver FLOW_VARIABLES acima.
+  async function tryFlowVariables() {
+    try {
+      const [emailResp, phoneResp] = await Promise.all([
+        sdk.callZoomApi('getEngagementVariableValue', { variableName: FLOW_VARIABLES.email }).catch(() => null),
+        sdk.callZoomApi('getEngagementVariableValue', { variableName: FLOW_VARIABLES.phone }).catch(() => null),
+      ]);
+      return {
+        email: (emailResp && emailResp.value) || null,
+        phone: (phoneResp && phoneResp.value) || null,
+      };
+    } catch (err) {
+      console.warn('Sem variáveis de Flow disponíveis:', err);
+      return { email: null, phone: null };
+    }
+  }
+
+  function renderEmpty(message) {
+    contentEl.innerHTML = '<div class="empty">' + message + '</div>';
+  }
+
+  let currentContactId = null;
+
+  function renderCustomer(data) {
+    const c = data.contact || {};
+    const deals = data.deals || [];
+    const tickets = data.tickets || [];
+    currentContactId = c.id || null;
+
+    const name = [c.firstname, c.lastname].filter(Boolean).join(' ') || 'Contato sem nome';
+
+    let html = '';
+    html += '<div class="card"><h2>Contato</h2>';
+    html += '<div class="row"><span>Nome</span><span>' + escapeHtml(name) + '</span></div>';
+    html += '<div class="row"><span>E-mail</span><span>' + escapeHtml(c.email || '—') + '</span></div>';
+    html += '<div class="field-row"><span>Telefone</span><input type="text" id="f-phone" value="' + escapeHtml(c.phone || '') + '" /></div>';
+    html += '<div class="field-row"><span>Cidade</span><input type="text" id="f-city" value="' + escapeHtml(c.city || '') + '" /></div>';
+    html += '<div class="field-actions"><button id="btn-save-contact">Salvar alterações</button></div>';
+    html += '<div id="contact-save-msg" class="save-msg"></div>';
+    if (c.url) html += '<a id="hs-link" href="' + c.url + '" target="_blank" rel="noopener">Abrir no HubSpot →</a>';
+    html += '</div>';
+
+    html += '<div class="card"><h2>Pedidos recentes</h2>';
+    if (deals.length === 0) {
+      html += '<div class="empty">Nenhum pedido encontrado.</div>';
+    } else {
+      deals.forEach(d => {
+        html += '<div class="item"><span class="title">' + escapeHtml(d.dealname || 'Pedido') + '</span>';
+        html += '<span class="badge">' + escapeHtml(d.dealstage || '') + '</span></div>';
+      });
+    }
+    html += '</div>';
+
+    html += '<div class="card"><h2>Chamados</h2>';
+    if (tickets.length === 0) {
+      html += '<div class="empty">Nenhum chamado encontrado.</div>';
+    } else {
+      tickets.forEach(t => {
+        html += '<div class="item"><span class="title">' + escapeHtml(t.subject || 'Chamado') + '</span>';
+        html += '<span class="badge">' + escapeHtml(t.hs_pipeline_stage || '') + '</span></div>';
+      });
+    }
+    html += '</div>';
+
+    html += '<div class="card"><h2>Registrar nota do atendimento</h2>';
+    html += '<textarea id="f-note" placeholder="Resumo do que foi tratado nesta ligação..."></textarea>';
+    html += '<div class="field-actions"><button id="btn-save-note">Salvar nota no HubSpot</button></div>';
+    html += '<div id="note-save-msg" class="save-msg"></div>';
+    html += '</div>';
+
+    contentEl.innerHTML = html;
+
+    document.getElementById('btn-save-contact').addEventListener('click', saveContact);
+    document.getElementById('btn-save-note').addEventListener('click', saveNote);
+  }
+
+  async function saveContact() {
+    if (!currentContactId) return;
+    const msgEl = document.getElementById('contact-save-msg');
+    const phone = document.getElementById('f-phone').value;
+    const city = document.getElementById('f-city').value;
+    msgEl.textContent = 'Salvando...';
+    msgEl.className = 'save-msg';
+    try {
+      const res = await fetch('/api/customer/' + currentContactId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, city }),
+      });
+      if (!res.ok) throw new Error('status ' + res.status);
+      msgEl.textContent = 'Salvo no HubSpot.';
+      msgEl.className = 'save-msg ok';
+    } catch (err) {
+      console.error(err);
+      msgEl.textContent = 'Erro ao salvar. Veja o console.';
+      msgEl.className = 'save-msg err';
+    }
+  }
+
+  async function saveNote() {
+    if (!currentContactId) return;
+    const msgEl = document.getElementById('note-save-msg');
+    const textEl = document.getElementById('f-note');
+    const body = textEl.value;
+    if (!body.trim()) return;
+    msgEl.textContent = 'Salvando...';
+    msgEl.className = 'save-msg';
+    try {
+      const res = await fetch('/api/customer/' + currentContactId + '/notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body, engagementId: currentEngagementId }),
+      });
+      if (!res.ok) throw new Error('status ' + res.status);
+      msgEl.textContent = 'Nota registrada no HubSpot.';
+      msgEl.className = 'save-msg ok';
+      textEl.value = '';
+    } catch (err) {
+      console.error(err);
+      msgEl.textContent = 'Erro ao salvar nota. Veja o console.';
+      msgEl.className = 'save-msg err';
+    }
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, s => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[s]));
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    init();
+    setTimeout(() => { if (!sdk) showDemoMode(); }, 3000);
+  });
+</script>
+</body>
+</html>
