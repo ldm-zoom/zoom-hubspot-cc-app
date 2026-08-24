@@ -1,0 +1,16 @@
+# Renomeie este arquivo para ".env" antes de rodar (não é permitido criar
+# arquivos .env diretamente por aqui, por segurança).
+
+# Token de Private App do HubSpot. Escopos necessários:
+# leitura: crm.objects.contacts.read, crm.objects.deals.read, crm.objects.tickets.read
+# escrita (para editar contato e salvar nota do atendimento):
+#   crm.objects.contacts.write, crm.objects.notes.write (ou crm.schemas.notes.write,
+#   dependendo da versão do painel de escopos do HubSpot)
+# O token já usado no MCP/ZVA da Mooz serve se você adicionar os escopos de write.
+HUBSPOT_TOKEN=
+
+# ID numérico do portal HubSpot (aparece na URL app.hubspot.com/.../<PORTAL_ID>/...).
+# Usado só para montar o link "Abrir no HubSpot". Opcional.
+HUBSPOT_PORTAL_ID=
+
+PORT=3000
