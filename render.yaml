@@ -1,0 +1,20 @@
+# Blueprint do Render (opcional). Se você usar "New > Blueprint" no Render
+# apontando pra este repo, ele já cria o Web Service com essas configs —
+# só falta preencher HUBSPOT_TOKEN e HUBSPOT_PORTAL_ID manualmente no
+# dashboard (não ficam neste arquivo por segurança).
+#
+# Se preferir, ignore este arquivo e crie o Web Service manualmente pelo
+# dashboard do Render — o passo a passo está no README.md.
+
+services:
+  - type: web
+    name: zoom-hubspot-cc-app
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: HUBSPOT_TOKEN
+        sync: false
+      - key: HUBSPOT_PORTAL_ID
+        sync: false
